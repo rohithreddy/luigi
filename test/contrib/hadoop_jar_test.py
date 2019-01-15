@@ -19,8 +19,9 @@ import luigi
 import tempfile
 import shlex
 from helpers import unittest
-from luigi.contrib.hadoop_jar import HadoopJarJobError, HadoopJarJobTask
-from mock import patch
+from luigi.contrib.hadoop_jar import HadoopJarJobError, HadoopJarJobTask, fix_paths
+from mock import patch, Mock
+from nose.plugins.attrib import attr
 
 
 class TestHadoopJarJob(HadoopJarJobTask):
@@ -46,6 +47,22 @@ class TestRemoteMissingJarJob(TestHadoopJarJob):
 
 class TestRemoteHadoopJarTwoParamJob(TestRemoteHadoopJarJob):
     param2 = luigi.Parameter()
+
+
+@attr('apache')
+class FixPathsTest(unittest.TestCase):
+    def test_fix_paths_non_hdfs_target_path(self):
+        mock_job = Mock()
+        mock_arg = Mock()
+        mock_job.args.return_value = [mock_arg]
+        mock_arg.path = 'right_path'
+        self.assertEqual(([], ['right_path']), fix_paths(mock_job))
+
+    def test_fix_paths_non_hdfs_target_str(self):
+        mock_job = Mock()
+        mock_arg = Mock(spec=[])
+        mock_job.args.return_value = [mock_arg]
+        self.assertEqual(([], [str(mock_arg)]), fix_paths(mock_job))
 
 
 class HadoopJarJobTaskTest(unittest.TestCase):
@@ -84,7 +101,7 @@ class HadoopJarJobTaskTest(unittest.TestCase):
                             raise AssertionError
 
             task = TestRemoteHadoopJarTwoParamJob(temp_file.name, 'test')
-            mock_job.side_effect = lambda x, _: check_space(x, task.task_id)
+            mock_job.side_effect = lambda x, _: check_space(x, str(task))
             task.run()
 
     @patch('luigi.contrib.hadoop.run_and_track_hadoop_job')

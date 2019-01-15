@@ -19,7 +19,7 @@ from __future__ import division
 import os
 import tempfile
 import time
-from helpers import unittest
+from helpers import unittest, RunOnceTask
 
 import luigi
 import luigi.notifications
@@ -33,7 +33,7 @@ tempdir = tempfile.mkdtemp()
 
 
 class DummyTask(luigi.Task):
-    task_id = luigi.Parameter()
+    task_id = luigi.IntParameter()
 
     def run(self):
         f = self.output().open('w')
@@ -44,7 +44,7 @@ class DummyTask(luigi.Task):
 
 
 class FactorTask(luigi.Task):
-    product = luigi.Parameter()
+    product = luigi.IntParameter()
 
     def requires(self):
         for factor in range(2, self.product):
@@ -76,7 +76,11 @@ class BadReqTask(luigi.Task):
 
 
 class FailingTask(luigi.Task):
-    task_id = luigi.Parameter()
+    task_namespace = __name__
+    task_id = luigi.IntParameter()
+
+    def complete(self):
+        return False
 
     def run(self):
         raise Exception("Error Message")
@@ -99,16 +103,15 @@ class OddFibTask(luigi.Task):
 
 
 class SchedulerVisualisationTest(unittest.TestCase):
-
     def setUp(self):
-        self.scheduler = luigi.scheduler.CentralPlannerScheduler()
+        self.scheduler = luigi.scheduler.Scheduler()
 
     def tearDown(self):
         pass
 
     def _assert_complete(self, tasks):
         for t in tasks:
-            self.assert_(t.complete())
+            self.assertTrue(t.complete())
 
     def _build(self, tasks):
         with luigi.worker.Worker(scheduler=self.scheduler, worker_processes=1) as w:
@@ -134,7 +137,7 @@ class SchedulerVisualisationTest(unittest.TestCase):
         remote = self._remote()
         graph = remote.graph()
         self.assertEqual(len(graph), 2)
-        self.assert_(DummyTask(task_id=1).task_id in graph)
+        self.assertTrue(DummyTask(task_id=1).task_id in graph)
         d1 = graph[DummyTask(task_id=1).task_id]
         self.assertEqual(d1[u'status'], u'DONE')
         self.assertEqual(d1[u'deps'], [])
@@ -159,7 +162,7 @@ class SchedulerVisualisationTest(unittest.TestCase):
 
         root_task = LinearTask(100)
 
-        self.scheduler = luigi.scheduler.CentralPlannerScheduler(max_graph_nodes=10)
+        self.scheduler = luigi.scheduler.Scheduler(max_graph_nodes=10)
         self._build([root_task])
 
         graph = self.scheduler.dep_graph(root_task.task_id)
@@ -180,7 +183,7 @@ class SchedulerVisualisationTest(unittest.TestCase):
 
         root_task = LinearTask(100)
 
-        self.scheduler = luigi.scheduler.CentralPlannerScheduler(max_graph_nodes=10)
+        self.scheduler = luigi.scheduler.Scheduler(max_graph_nodes=10)
         self._build([root_task])
 
         graph = self.scheduler.inverse_dep_graph(LinearTask(0).task_id)
@@ -189,7 +192,7 @@ class SchedulerVisualisationTest(unittest.TestCase):
         six.assertCountEqual(self, expected_nodes, graph)
 
     def test_truncate_graph_with_full_levels(self):
-        class BinaryTreeTask(luigi.Task):
+        class BinaryTreeTask(RunOnceTask):
             idx = luigi.IntParameter()
 
             def requires(self):
@@ -198,7 +201,7 @@ class SchedulerVisualisationTest(unittest.TestCase):
 
         root_task = BinaryTreeTask(1)
 
-        self.scheduler = luigi.scheduler.CentralPlannerScheduler(max_graph_nodes=10)
+        self.scheduler = luigi.scheduler.Scheduler(max_graph_nodes=10)
         self._build([root_task])
 
         graph = self.scheduler.dep_graph(root_task.task_id)
@@ -220,12 +223,12 @@ class SchedulerVisualisationTest(unittest.TestCase):
 
         root_task = LinearTask(100)
 
-        self.scheduler = luigi.scheduler.CentralPlannerScheduler(max_graph_nodes=10)
+        self.scheduler = luigi.scheduler.Scheduler(max_graph_nodes=10)
         self._build([root_task])
 
         graph = self.scheduler.dep_graph(root_task.task_id)
         self.assertEqual(10, len(graph))
-        expected_nodes = [LinearTask(i).task_id for i in range(100, 91, -1)] +\
+        expected_nodes = [LinearTask(i).task_id for i in range(100, 91, -1)] + \
                          [LinearTask(0).task_id]
         self.maxDiff = None
         six.assertCountEqual(self, expected_nodes, graph)
@@ -292,7 +295,7 @@ class SchedulerVisualisationTest(unittest.TestCase):
 
         fail = dep_graph[BadReqTask(succeed=False).task_id]
         self.assertEqual(fail[u'name'], 'BadReqTask')
-        self.assertEqual(fail[u'params'], {'task_id': BadReqTask(succeed=False).task_id})
+        self.assertEqual(fail[u'params'], {'succeed': 'False'})
         self.assertEqual(fail[u'status'], 'UNKNOWN')
 
     def test_dep_graph_diamond(self):
@@ -386,30 +389,29 @@ class SchedulerVisualisationTest(unittest.TestCase):
 
     def test_task_list_upstream_status(self):
         class A(luigi.ExternalTask):
-            pass
+            def complete(self):
+                return False
 
         class B(luigi.ExternalTask):
-
             def complete(self):
                 return True
 
-        class C(luigi.Task):
-
+        class C(RunOnceTask):
             def requires(self):
                 return [A(), B()]
 
         class F(luigi.Task):
+            def complete(self):
+                return False
 
             def run(self):
                 raise Exception()
 
-        class D(luigi.Task):
-
+        class D(RunOnceTask):
             def requires(self):
                 return [F()]
 
-        class E(luigi.Task):
-
+        class E(RunOnceTask):
             def requires(self):
                 return [C(), D()]
 
@@ -477,22 +479,20 @@ class SchedulerVisualisationTest(unittest.TestCase):
         self.assertTrue("Traceback" in error["error"])
 
     def test_inverse_deps(self):
-        class X(luigi.Task):
+        class X(RunOnceTask):
             pass
 
-        class Y(luigi.Task):
-
+        class Y(RunOnceTask):
             def requires(self):
                 return [X()]
 
-        class Z(luigi.Task):
-            id = luigi.Parameter()
+        class Z(RunOnceTask):
+            id = luigi.IntParameter()
 
             def requires(self):
                 return [Y()]
 
-        class ZZ(luigi.Task):
-
+        class ZZ(RunOnceTask):
             def requires(self):
                 return [Z(1), Z(2)]
 
@@ -512,7 +512,6 @@ class SchedulerVisualisationTest(unittest.TestCase):
 
     def test_simple_worker_list(self):
         class X(luigi.Task):
-
             def run(self):
                 self._complete = True
 
@@ -530,16 +529,15 @@ class SchedulerVisualisationTest(unittest.TestCase):
         self.assertEqual(0, worker['num_pending'])
         self.assertEqual(0, worker['num_uniques'])
         self.assertEqual(0, worker['num_running'])
+        self.assertEqual('active', worker['state'])
         self.assertEqual(1, worker['workers'])
 
     def test_worker_list_pending_uniques(self):
         class X(luigi.Task):
-
             def complete(self):
                 return False
 
         class Y(X):
-
             def requires(self):
                 return X()
 
@@ -560,7 +558,7 @@ class SchedulerVisualisationTest(unittest.TestCase):
             self.assertEqual(0, worker['num_running'])
 
     def test_worker_list_running(self):
-        class X(luigi.Task):
+        class X(RunOnceTask):
             n = luigi.IntParameter()
 
         w = luigi.worker.Worker(worker_id='w', scheduler=self.scheduler, worker_processes=3)
@@ -581,6 +579,17 @@ class SchedulerVisualisationTest(unittest.TestCase):
         self.assertEqual(1, worker['num_pending'])
         self.assertEqual(1, worker['num_uniques'])
 
+    def test_worker_list_disabled_worker(self):
+        class X(RunOnceTask):
+            pass
 
-if __name__ == '__main__':
-    unittest.main()
+        with luigi.worker.Worker(worker_id='w', scheduler=self.scheduler) as w:
+            w.add(X())  #
+            workers = self._remote().worker_list()
+            self.assertEqual(1, len(workers))
+            self.assertEqual('active', workers[0]['state'])
+            self.scheduler.disable_worker('w')
+            workers = self._remote().worker_list()
+            self.assertEqual(1, len(workers))
+            self.assertEqual(1, len(workers))
+            self.assertEqual('disabled', workers[0]['state'])

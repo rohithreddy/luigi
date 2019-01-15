@@ -25,6 +25,8 @@ import shutil
 import tempfile
 import unittest
 
+from nose.plugins.attrib import attr
+
 
 class MyScaldingTask(scalding.ScaldingJobTask):
     scala_source = luigi.Parameter()
@@ -33,6 +35,7 @@ class MyScaldingTask(scalding.ScaldingJobTask):
         return self.scala_source
 
 
+@attr('contrib')
 class ScaldingTest(unittest.TestCase):
     def setUp(self):
         self.scalding_home = os.path.join(tempfile.gettempdir(), 'scalding-%09d' % random.randint(0, 999999999))
@@ -60,6 +63,3 @@ class ScaldingTest(unittest.TestCase):
         success = luigi.run(['MyScaldingTask', '--scala-source', self.scala_source, '--local-scheduler', '--no-lock'])
         self.assertTrue(success)
         # TODO: check more stuff
-
-if __name__ == '__main__':
-    luigi.run()

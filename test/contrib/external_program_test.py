@@ -25,6 +25,8 @@ from luigi import six
 from luigi.contrib.external_program import ExternalProgramTask, ExternalPythonProgramTask
 from luigi.contrib.external_program import ExternalProgramRunError
 from mock import patch, call
+import mock
+from nose.plugins.attrib import attr
 
 BytesIO = six.BytesIO
 
@@ -64,6 +66,14 @@ class TestTouchTask(ExternalProgramTask):
         return luigi.LocalTarget(self.file_path)
 
 
+class TestEchoTask(ExternalProgramTask):
+    MESSAGE = "Hello, world!"
+
+    def program_args(self):
+        return ['echo', self.MESSAGE]
+
+
+@attr('contrib')
 class ExternalProgramTaskTest(unittest.TestCase):
     @patch('luigi.contrib.external_program.subprocess.Popen')
     def test_run(self, proc):
@@ -112,6 +122,21 @@ class ExternalProgramTaskTest(unittest.TestCase):
         job.run()
 
         self.assertIn(call.info('Program stderr:\nstderr'), logger.mock_calls)
+
+    def test_capture_output_set_to_false_writes_output_to_stdout(self):
+        from subprocess import Popen
+
+        out = tempfile.TemporaryFile()
+
+        def Popen_wrap(args, **kwargs):
+            kwargs.pop('stdout', None)
+            return Popen(args, stdout=out, **kwargs)
+
+        with mock.patch('luigi.contrib.external_program.subprocess.Popen', wraps=Popen_wrap):
+            task = TestEchoTask(capture_output=False)
+            task.run()
+            stdout = task._clean_output_file(out).strip()
+            self.assertEqual(stdout, task.MESSAGE)
 
     @patch('luigi.contrib.external_program.logger')
     @patch('luigi.contrib.external_program.tempfile.TemporaryFile')
@@ -171,6 +196,7 @@ class TestExternalPythonProgramTask(ExternalPythonProgramTask):
         return luigi.LocalTarget('output')
 
 
+@attr('contrib')
 class ExternalPythonProgramTaskTest(unittest.TestCase):
     @patch.dict('os.environ', {'OTHERVAR': 'otherval'}, clear=True)
     @patch('luigi.contrib.external_program.subprocess.Popen')
@@ -197,7 +223,7 @@ class ExternalPythonProgramTaskTest(unittest.TestCase):
         self.assertTrue(proc_env['PATH'].startswith('/path/to/venv/bin'))
         self.assertTrue(proc_env['PATH'].endswith('/base/path'))
         self.assertIn('VIRTUAL_ENV', proc_env)
-        self.assertEquals(proc_env['VIRTUAL_ENV'], '/path/to/venv')
+        self.assertEqual(proc_env['VIRTUAL_ENV'], '/path/to/venv')
 
     @patch.dict('os.environ', {}, clear=True)
     @patch('luigi.contrib.external_program.subprocess.Popen')

@@ -24,6 +24,7 @@ import luigi
 from luigi.db_task_history import DbTaskHistory
 from luigi.task_status import DONE, PENDING, RUNNING
 import luigi.scheduler
+from luigi.parameter import ParameterVisibility
 
 
 class DummyTask(luigi.Task):
@@ -32,7 +33,8 @@ class DummyTask(luigi.Task):
 
 class ParamTask(luigi.Task):
     param1 = luigi.Parameter()
-    param2 = luigi.IntParameter()
+    param2 = luigi.IntParameter(visibility=ParameterVisibility.HIDDEN)
+    param3 = luigi.Parameter(default="empty", visibility=ParameterVisibility.PRIVATE)
 
 
 class DbTaskHistoryTest(unittest.TestCase):
@@ -93,7 +95,7 @@ class DbTaskHistoryTest(unittest.TestCase):
 
     def run_task(self, task):
         task2 = luigi.scheduler.Task(task.task_id, PENDING, [], family=task.task_family,
-                                     params=task.param_kwargs)
+                                     params=task.param_kwargs, retry_policy=luigi.scheduler._get_empty_retry_policy())
 
         self.history.task_scheduled(task2)
         self.history.task_started(task2, 'hostname')
@@ -133,7 +135,8 @@ class MySQLDbTaskHistoryTest(unittest.TestCase):
 
     def run_task(self, task):
         task2 = luigi.scheduler.Task(task.task_id, PENDING, [],
-                                     family=task.task_family, params=task.param_kwargs)
+                                     family=task.task_family, params=task.param_kwargs,
+                                     retry_policy=luigi.scheduler._get_empty_retry_policy())
 
         self.history.task_scheduled(task2)
         self.history.task_started(task2, 'hostname')

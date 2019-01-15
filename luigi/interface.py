@@ -22,14 +22,12 @@ defined in this module to programatically run luigi.
 """
 
 import logging
-import logging.config
 import os
 import sys
 import tempfile
 import signal
 import warnings
 
-from luigi import configuration
 from luigi import lock
 from luigi import parameter
 from luigi import rpc
@@ -38,28 +36,7 @@ from luigi import task
 from luigi import worker
 from luigi import execution_summary
 from luigi.cmdline_parser import CmdlineParser
-
-
-def setup_interface_logging(conf_file=''):
-    # use a variable in the function object to determine if it has run before
-    if getattr(setup_interface_logging, "has_run", False):
-        return
-
-    if conf_file == '':
-        logger = logging.getLogger('luigi-interface')
-        logger.setLevel(logging.DEBUG)
-
-        stream_handler = logging.StreamHandler()
-        stream_handler.setLevel(logging.DEBUG)
-
-        formatter = logging.Formatter('%(levelname)s: %(message)s')
-        stream_handler.setFormatter(formatter)
-
-        logger.addHandler(stream_handler)
-    else:
-        logging.config.fileConfig(conf_file, disable_existing_loggers=False)
-
-    setup_interface_logging.has_run = True
+from luigi.setup_logging import InterfaceLogging
 
 
 class core(task.Config):
@@ -108,6 +85,10 @@ class core(task.Config):
     logging_conf_file = parameter.Parameter(
         default='',
         description='Configuration file for logging')
+    log_level = parameter.ChoiceParameter(
+        default='DEBUG',
+        choices=['NOTSET', 'DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL'],
+        description="Default log level to use when logging_conf_file is not set")
     module = parameter.Parameter(
         default='',
         description='Used for dynamic loading of modules',
@@ -115,6 +96,10 @@ class core(task.Config):
     parallel_scheduling = parameter.BoolParameter(
         default=False,
         description='Use multiprocessing to do scheduling in parallel.')
+    parallel_scheduling_processes = parameter.IntParameter(
+        default=0,
+        description='The number of processes to use for scheduling in parallel.'
+                    ' By default the number of available CPUs will be used')
     assistant = parameter.BoolParameter(
         default=False,
         description='Run any task from the scheduler.')
@@ -131,7 +116,7 @@ class core(task.Config):
 class _WorkerSchedulerFactory(object):
 
     def create_local_scheduler(self):
-        return scheduler.CentralPlannerScheduler(prune_on_get_work=True, record_task_history=False)
+        return scheduler.Scheduler(prune_on_get_work=True, record_task_history=False)
 
     def create_remote_scheduler(self, url):
         return rpc.RemoteScheduler(url)
@@ -155,17 +140,8 @@ def _schedule_and_run(tasks, worker_scheduler_factory=None, override_defaults=No
     if override_defaults is None:
         override_defaults = {}
     env_params = core(**override_defaults)
-    # search for logging configuration path first on the command line, then
-    # in the application config file
-    logging_conf = env_params.logging_conf_file
-    if logging_conf != '' and not os.path.exists(logging_conf):
-        raise Exception(
-            "Error: Unable to locate specified logging configuration file!"
-        )
 
-    if not configuration.get_config().getboolean(
-            'core', 'no_configure_logging', False):
-        setup_interface_logging(logging_conf)
+    InterfaceLogging.setup(env_params)
 
     kill_signal = signal.SIGUSR1 if env_params.take_lock else None
     if (not env_params.no_lock and
@@ -191,10 +167,9 @@ def _schedule_and_run(tasks, worker_scheduler_factory=None, override_defaults=No
     logger = logging.getLogger('luigi-interface')
     with worker:
         for t in tasks:
-            success &= worker.add(t, env_params.parallel_scheduling)
+            success &= worker.add(t, env_params.parallel_scheduling, env_params.parallel_scheduling_processes)
         logger.info('Done scheduling tasks')
-        if env_params.workers != 0:
-            success &= worker.run()
+        success &= worker.run()
     logger.info(execution_summary.summary(worker))
     return dict(success=success, worker=worker)
 
@@ -207,22 +182,18 @@ class PidLockAlreadyTakenExit(SystemExit):
 
 
 def run(*args, **kwargs):
-    return _run(*args, **kwargs)['success']
-
-
-def _run(cmdline_args=None, main_task_cls=None,
-         worker_scheduler_factory=None, use_dynamic_argparse=None, local_scheduler=False):
     """
     Please dont use. Instead use `luigi` binary.
 
     Run from cmdline using argparse.
 
-    :param cmdline_args:
-    :param main_task_cls:
-    :param worker_scheduler_factory:
     :param use_dynamic_argparse: Deprecated and ignored
-    :param local_scheduler:
     """
+    return _run(*args, **kwargs)['success']
+
+
+def _run(cmdline_args=None, main_task_cls=None,
+         worker_scheduler_factory=None, use_dynamic_argparse=None, local_scheduler=False):
     if use_dynamic_argparse is not None:
         warnings.warn("use_dynamic_argparse is deprecated, don't set it.",
                       DeprecationWarning, stacklevel=2)
@@ -232,7 +203,7 @@ def _run(cmdline_args=None, main_task_cls=None,
     if main_task_cls:
         cmdline_args.insert(0, main_task_cls.task_family)
     if local_scheduler:
-        cmdline_args.insert(0, '--local-scheduler')
+        cmdline_args.append('--local-scheduler')
 
     with CmdlineParser.global_instance(cmdline_args) as cp:
         return _schedule_and_run([cp.get_task_obj()], worker_scheduler_factory)
